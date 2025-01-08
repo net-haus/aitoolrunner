@@ -1,0 +1,158 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"csharp"}]}}
+
+#!markdown
+
+Kommunikation mit dem Model: Basic
+
+#!csharp
+
+#r "nuget: RestSharp, 112.1.0"
+#r "nuget: Newtonsoft.Json, 13.0.3"
+
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Text.RegularExpressions;
+
+var endpoint = "https://openai.inference.de-txl.ionos.com/v1/";
+//var endpoint = "https://api.groq.com/openai/v1/";
+
+var options = new RestClientOptions(endpoint) {
+    Timeout=new TimeSpan(0,10,0)
+};
+var client = new RestClient(options);
+
+
+var API_TOKEN=  Environment.GetEnvironmentVariable("KI_API_KEY");
+
+
+var MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct";
+//MODEL_NAME = "meta-llama/Meta-Llama-3.1-405B-Instruct-FP8";
+//var MODEL_NAME = "llama-3.3-70b-versatile";
+
+var system="Du bist ein hilfreicher Assitent";
+var payload = new{
+   messages = new List<object>() {
+    new {
+        role = "system",
+        content = system
+      },
+      
+   },
+   max_tokens = 1024,
+   model = MODEL_NAME
+};
+payload.messages.Add(new{role= "user", content=  "Wie ist heute das Wetter in Berlin?" });
+    var request = new RestRequest("chat/completions")
+    .AddHeader("Authorization","Bearer "+API_TOKEN)
+    .AddJsonBody(payload);
+    // The cancellation token comes from the caller. You can still make a call without it.
+    var response = await client.PostAsync(request);
+    var responseObject = JObject.Parse(response.Content);
+var messageFromKI=(string)responseObject.SelectToken("choices[0].message.content");
+messageFromKI
+
+#!markdown
+
+Kommunikation mit dem Modell und Function call.
+
+#!csharp
+
+#r "nuget: RestSharp, 112.1.0"
+#r "nuget: Newtonsoft.Json, 13.0.3"
+
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Text.RegularExpressions;
+
+var endpoint = "https://openai.inference.de-txl.ionos.com/v1/";
+//var endpoint = "https://api.groq.com/openai/v1/";
+
+var options = new RestClientOptions(endpoint) {
+    Timeout=new TimeSpan(0,10,0)
+};
+var client = new RestClient(options);
+
+
+var API_TOKEN=  Environment.GetEnvironmentVariable("KI_API_KEY");
+
+
+var MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct";
+//MODEL_NAME = "meta-llama/Meta-Llama-3.1-405B-Instruct-FP8";
+//var MODEL_NAME = "llama-3.3-70b-versatile";
+
+var jsonSchemaeWatherFunction = new {
+    name = "get_current_weather",
+    description = "Get the current weather in a given city",
+    parameters = new {
+        type = "object",
+        properties = new {
+            city = new {
+                type= "string",
+                description = "he city e.g. Berlin",
+            },
+        },
+        required = new []{"city"},
+    }
+};
+
+var functionsa="{\"example_name\": \"example_value\"}";
+var functionSchema=JsonConvert.SerializeObject(jsonSchemaeWatherFunction);
+var toolPrompt = $"""
+You are a helpful assistant.
+
+You have access to the following functions:
+
+Use the function '{jsonSchemaeWatherFunction.name}' to '{jsonSchemaeWatherFunction.description}':
+{functionSchema}
+
+If you choose to call a function ONLY reply in the following format in one line with no prefix or suffix:
+
+<function=example_function_name>{functionsa}</function>
+
+Reminder:
+- Function calls MUST follow the specified format, start with <function= and end with </function>
+- Required parameters MUST be specified
+- Only call one function at a time
+- Put the entire function call reply on one line
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+
+""";
+
+
+var payload = new{
+   messages = new List<object>() {
+    new {
+        role = "system",
+        content = toolPrompt
+      },
+      
+   },
+   max_tokens = 1024,
+   model = MODEL_NAME
+};
+
+payload.messages.Add(new{role= "user", content=  "Wie ist heute das Wetter in Berlin?" });
+    var request = new RestRequest("chat/completions")
+    .AddHeader("Authorization","Bearer "+API_TOKEN)
+    .AddJsonBody(payload);
+    // The cancellation token comes from the caller. You can still make a call without it.
+    var response = await client.PostAsync(request);
+    var responseObject = JObject.Parse(response.Content);
+var messageFromKI=(string)responseObject.SelectToken("choices[0].message.content");
+Console.WriteLine(messageFromKI);
+
+payload.messages.Add(new{role= "assistant", content= messageFromKI});
+var toolMessage="28 Grad Celsius, sunny";
+payload.messages.Add(new{role= "tool", content= toolMessage});
+request = new RestRequest("chat/completions")
+    .AddHeader("Authorization","Bearer "+API_TOKEN)
+    .AddJsonBody(payload);
+    // The cancellation token comes from the caller. You can still make a call without it.
+response = await client.PostAsync(request);
+responseObject = JObject.Parse(response.Content);
+var finalMessageFromKI=(string)responseObject.SelectToken("choices[0].message.content");
+finalMessageFromKI

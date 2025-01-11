@@ -1,0 +1,199 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"csharp"}]}}
+
+#!csharp
+
+#r "nuget: RestSharp, 112.1.0"
+#r "nuget: Newtonsoft.Json, 13.0.3"
+
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Text.RegularExpressions;
+
+public class Llama31Tools{
+ public static (string,string) parseToolResponse(string responsea) {
+   if(string.IsNullOrEmpty(responsea))
+     return (null,null);
+
+   var lines=responsea.Split('\n');
+
+   foreach(var line in lines)  
+   {
+     if(string.IsNullOrWhiteSpace(line))
+        continue;
+    var response=line.Trim();
+   string pattern="<function=(\\w+)>(.*?)<\\/function>";
+   Regex rg = new Regex(pattern);
+   bool  match = rg.IsMatch(response);
+
+  if (match) {
+    var matches=rg.Matches(response);
+    string functionName="";
+         if(matches.Count()==1)
+         {
+               var groups=matches[0].Groups;
+               if(groups.Count==3)
+               {
+                  functionName=groups[1].Value;
+                  var arguments=groups[2].Value;
+                  try
+                  {
+                     return (functionName, arguments);
+                  }
+                  catch
+                  {
+                     return (null,null);
+                  }
+               }   
+         }
+  }
+   }
+  return (null,null);
+}
+
+
+public static bool isToolResponse(string response){
+   string pattern="<function=(\\w+)>(.*?)<\\/function>";
+   Regex rg = new Regex(pattern);
+   bool  match = rg.IsMatch(response);
+
+  if (match) {
+     return true;
+  }
+  return false;
+}
+
+public static string getGenericToolSection()
+{
+   var functionsa="{\"example_name\": \"example_value\"}";
+string pattern=$"""
+   If you choose to call a function ONLY reply in the following format in one line with no prefix or suffix:
+
+<function=example_function_name>{functionsa}</function>
+
+Reminder:
+- Function calls MUST follow the specified format, start with <function= and end with </function>
+- Required parameters MUST be specified
+- Only call one function at a time
+- Put the entire function call reply on one line
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+""";
+return pattern;
+}
+
+
+}
+
+#!csharp
+
+#r "nuget: RestSharp, 112.1.0"
+#r "nuget: Newtonsoft.Json, 13.0.3"
+
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Text.RegularExpressions;
+
+public  class Llama31Payload
+{
+   public List<object>  messages {get; set;} = new List<object>();
+   public int max_tokens {get; set;} = 1024;
+   public string model {get; set;} ="";
+   public double temperature {get; set;} =0.0;
+} 
+
+public class Llama31Agent
+{
+   public Llama31Payload payload=new Llama31Payload();
+
+   public delegate string ToolCall(string toolname, string args);
+   
+    private ToolCall _toolCall;
+
+    private string API_TOKEN;
+
+    private RestClient client;
+
+public Llama31Agent(string endpoint,string API_TOKEN,string modelName,string systemPrompt, ToolCall toolCall ){
+    this.API_TOKEN=API_TOKEN;
+_toolCall = toolCall;
+
+var genericToolSection=Llama31Tools.getGenericToolSection();
+
+var toolPrompt = $"""
+{systemPrompt}
+
+{genericToolSection}
+
+""";
+
+
+payload.messages.Add(
+    new {
+        role = "system",
+        content = toolPrompt
+      });
+      
+payload.max_tokens = 1024;
+payload.model = modelName;
+payload.temperature=0.3;
+
+    var options = new RestClientOptions(endpoint) {
+    Timeout=new TimeSpan(0,10,0)
+  };
+  client = new RestClient(options);
+}
+
+public void clearHistory(){
+     for(int i=payload.messages.Count-1;i>0;i--)
+     {
+        payload.messages.RemoveAt(i);
+     }
+}
+
+private async Task<string> addToolMessage(string pru){
+    
+    payload.messages.Add(new{role= "tool", content= pru});
+    var request = new RestRequest("chat/completions")
+    .AddHeader("Authorization","Bearer "+API_TOKEN)
+    .AddJsonBody(payload);
+    // The cancellation token comes from the caller. You can still make a call without it.
+    var response = await client.PostAsync(request);
+    var responseObject = JObject.Parse(response.Content);
+    var messageFromKI=(string)responseObject.SelectToken("choices[0].message.content");
+    payload.messages.Add(new{role= "assistant", content= messageFromKI});
+    return messageFromKI;
+}
+
+public async Task<string> addMessage(string pru){
+//payload.Display();
+payload.messages.Add(new{role= "user", content= pru});
+var request = new RestRequest("chat/completions")
+.AddHeader("Authorization","Bearer "+API_TOKEN)
+.AddJsonBody(payload);
+var response = await client.PostAsync(request);
+var responseObject = JObject.Parse(response.Content);
+var messageFromKI=(string)responseObject.SelectToken("choices[0].message.content");
+if(Llama31Tools.isToolResponse(messageFromKI))
+{
+    var res=Llama31Tools.parseToolResponse(messageFromKI);
+    if(res.Item1!=null)
+    {
+       payload.messages.Add(new{role= "assistant", content= messageFromKI});
+       var toolMessage=this._toolCall(res.Item1, res.Item2);
+       await addToolMessage(toolMessage);
+    }
+    else
+    {
+        Console.WriteLine("Error");
+    }
+}
+else
+{
+    payload.messages.Add(new{role= "assistant", content= messageFromKI});
+}
+return "";  
+}
+}

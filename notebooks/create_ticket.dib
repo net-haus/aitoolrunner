@@ -1,0 +1,142 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"csharp"}]}}
+
+#!markdown
+
+# AI Ticket Agent with Meta Llama 3.1
+
+In this example, we will use the Meta Llama 3.1 model with tool calling to create a simple agent. The agent will collect the necessary data to create a ticket from the user. If all the data is available, the agent will perform a tool call to send the ticket to the REST API of a ticket application.
+
+#!markdown
+
+We first initialize our ticket agent. The import of the tools notebook provides us with some helper methods and the class `Llama31Agent` for a generic agent.
+
+The IONOS endpoint is used for inference. Alternatively, the Groq endpoint can also be used.
+
+The API Token is loaded from the environment variable `KI_API_KEY`.
+
+The model used with IONOS is Meta Llama 3.1, 70B. Other options are commented out. If you use Groq, you can also use the new Meta Llama 3.3, 70B model.
+
+To create the system prompt for the ticket agent, we first create the JSON Schema for the tool call. We have one tool: `create_new_ticket` with two arguments: `subject` and `email`. The `subject` is required. In the description, the function and the arguments are described. This is necessary because the model uses it to call the right tool and deliver the right arguments. The schema is serialized so that it can be added to the system prompt.
+
+In the system prompt, we describe the task the agent is responsible for and the tools the agent can use. The task is to create a ticket with properties: `subject` and `email` from the chat with a user. If all the information is collected, the ticket will be created. For this reason, the agent can use the tool `create_new_ticket` with the JSON Schema defined before.
+
+At the end, we can create our ticket agent using the system prompt and the other properties defined before. Additionally, we add a lambda expression to perform a tool call if the agent requests it. We have only one tool, and we simply write the arguments: `subject` and `email` to the console. Instead of sending the ticket to an external ticket REST API, we mock it by creating a new ticket number.
+
+#!csharp
+
+#r "nuget: RestSharp, 112.1.0"
+#r "nuget: Newtonsoft.Json, 13.0.3"
+
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Text.RegularExpressions;
+
+#!import tools.dib
+
+var endpoint = "https://openai.inference.de-txl.ionos.com/v1/";
+//var endpoint = "https://api.groq.com/openai/v1/";
+
+
+var API_TOKEN=Environment.GetEnvironmentVariable("KI_API_KEY");
+
+var MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct";
+//var MODEL_NAME = "meta-llama/Meta-Llama-3.1-405B-Instruct-FP8";
+//var MODEL_NAME = "meta-llama/Meta-Llama-3.1-8B-Instruct";
+//var MODEL_NAME = "llama-3.3-70b-versatile";
+var ticketTool = new {
+    name = "create_new_ticket",
+    description = "create a new ticket",
+    parameters = new {
+        type = "object",
+        properties = new {
+            subject = new {
+                type= "string",
+                description = "The subject of the ticket",
+            },
+            email = new {
+                type= "string",
+                description = "email of user",
+            },
+        },
+        required = new []{"subject"},
+    }
+};
+
+
+var functionSchema=JsonConvert.SerializeObject(ticketTool);
+
+
+var sysPrompt = $"""
+You are a helpful assistant.
+You create a ticket.
+The ticket has the following properties:
+- subject: subject of ticket
+- email: email of user
+
+Only If you have all informations from the user, use the function: create_new_ticket to save the ticket and inform user about the id of the new ticket.
+
+You have access to the following functions:
+
+Use the function '{ticketTool.name}' to '{ticketTool.description}':
+{functionSchema}
+""";
+
+
+var ticketAgent=new Llama31Agent(
+    endpoint,API_TOKEN,MODEL_NAME,sysPrompt, (string name, string args)=>{
+       //args.Display();
+       Console.WriteLine("Tool call:");
+       if(!string.IsNullOrEmpty(args))
+       {
+          var jargs=JObject.Parse(args as string);
+          Console.WriteLine("email: "+ jargs["email"]);
+          Console.WriteLine("subject: "+ jargs["subject"]);
+       } 
+       var functionResult="New ticket has number: " + Guid.NewGuid().ToString("N");
+       Console.WriteLine("result: "+functionResult);
+       return functionResult;
+    }
+);
+
+#!markdown
+
+Now that we have initialized our ticket agent, we ask it to create a ticket.
+
+#!csharp
+
+await ticketAgent.addMessage("Ich möchte einen Schaden melden!");
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+
+#!markdown
+
+Our agent now does its job and asks the user for the subject and email. We will enter the email first.
+
+#!csharp
+
+await ticketAgent.addMessage("Meine E-Mail ist: a.wenzel@net-haus.com");
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+
+#!markdown
+
+Now the agent asks for the subject.
+
+#!csharp
+
+await ticketAgent.addMessage("Ich habe einen Wasserschaden in meiner Wohnung");
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+
+#!markdown
+
+The agent has now successfully collected the subject and email. Using these data as arguments, the tool create_new_ticket is requested by the LLM. The agent performs the tool call using the lambda expression provided in the constructor. We mock the tool call by providing the answer: "New ticket has number: ...". Finally, the LLM formulates the answer.
+
+The history of the chat messages, beginning with the system prompt and ending with the answer after the tool call, can be seen here:
+
+#!csharp
+
+foreach( var message in ticketAgent.payload.messages)
+{
+    Console.WriteLine(JsonConvert.SerializeObject(message));
+}

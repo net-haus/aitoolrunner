@@ -1,0 +1,333 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"csharp"}]}}
+
+#!markdown
+
+Testing an AI Ticket Agent
+-------------------------
+
+#!markdown
+
+In this notebook, we will test the AI Ticket Agent used in the notebook create_ticket.dib.
+
+First, we will create our AI Ticket Agent.
+
+#!csharp
+
+#r "nuget: RestSharp, 112.1.0"
+#r "nuget: Newtonsoft.Json, 13.0.3"
+
+using RestSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Text.RegularExpressions;
+
+#!import tools.dib
+
+var endpoint = "https://openai.inference.de-txl.ionos.com/v1/";
+//var endpoint = "https://api.groq.com/openai/v1/";
+
+
+var API_TOKEN=Environment.GetEnvironmentVariable("KI_API_KEY");
+
+var MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct";
+//var MODEL_NAME = "meta-llama/Meta-Llama-3.1-405B-Instruct-FP8";
+//var MODEL_NAME = "meta-llama/Meta-Llama-3.1-8B-Instruct";
+//var MODEL_NAME = "llama-3.3-70b-versatile";
+var ticketTool = new {
+    name = "create_new_ticket",
+    description = "create a new ticket",
+    parameters = new {
+        type = "object",
+        properties = new {
+            message = new {
+                type= "string",
+                description = "The text of the ticket",
+            },
+            email = new {
+                type= "string",
+                description = "email of user",
+            },
+        },
+        required = new []{"message"},
+    }
+};
+
+
+var functionSchema=JsonConvert.SerializeObject(ticketTool);
+
+
+var sysPrompt = $"""
+You are a helpful assistant.
+You create a ticket.
+The ticket has the following properties:
+- message: message of ticket
+- email: email of user
+
+Only If you have all informations from the user, use the function: create_new_ticket to save the ticket and inform user about the id of the new ticket.
+
+You have access to the following functions:
+
+Use the function '{ticketTool.name}' to '{ticketTool.description}':
+{functionSchema}
+""";
+
+JObject lastToolCallResult = null; 
+var ticketAgent=new Llama31Agent(
+    endpoint,API_TOKEN,MODEL_NAME,sysPrompt, (string name, string args)=>{
+       //args.Display();
+       Console.WriteLine("Tool call:");
+       if(!string.IsNullOrEmpty(args))
+       {
+          lastToolCallResult=JObject.Parse(args as string);
+          var jargs=lastToolCallResult;
+          Console.WriteLine("email: "+ jargs["email"]);
+          Console.WriteLine("message: "+ jargs["message"]);
+       } 
+       var functionResult="New ticket has number: " + Guid.NewGuid().ToString("N");
+       Console.WriteLine("result: "+functionResult);
+       return functionResult;
+    }
+);
+
+#!markdown
+
+For testing, we will use a synthetic dataset with tickets that I created.
+
+We will load the second ticket from the dataset.
+
+Communication is started by the user with an introduction, e.g.: 'Ich habe ein Problem in meiner Wohnung.' (I have a problem in my apartment.)
+
+Then, the email and message from the test data are sent to the AI Ticket Agent.
+
+In most cases, a tool call is detected and applied by the AI Ticket Agent, as you can see in the output.
+
+#!csharp
+
+using System.IO;
+var testTickets=File.ReadAllText("damage_tickets_full_v3.json");
+var array = JArray.Parse(testTickets);
+
+var row = array[1];
+
+ticketAgent.clearHistory();
+
+///Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages));
+
+
+//Console.WriteLine(JsonConvert.SerializeObject(row));
+Console.WriteLine("____________________________________________________________");
+Console.WriteLine(row.Value<string>("intro"));
+await ticketAgent.addMessage(row.Value<string>("intro"));
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+Console.WriteLine(row.Value<string>("email"));
+await ticketAgent.addMessage(row.Value<string>("email"));
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+Console.WriteLine(row.Value<string>("description"));
+await ticketAgent.addMessage(row.Value<string>("description"));
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+
+#!markdown
+
+The chat history shows the communication between the AI Ticket Agent (role: assistant) and the user (role: user). At the end, you can see the tool call detected by the LLM, the result of the tool call (role: tool), and the response from the model (role: assistant).
+
+#!csharp
+
+ticketAgent.payload.messages
+
+#!markdown
+
+If you run the test dialog frequently, you will find that sometimes after the introduction: 'Ich habe ein Problem in meiner Wohnung.' (I have a problem in my apartment.), the agent does not ask for an email but for a message. In this case, our test dialog does not work, and the tool call is not performed correctly.
+
+Therefore, after every response from the AI Ticket Agent, we have to check whether we need to provide an email or a message from the test data. For this purpose, we create a test agent.
+
+#!csharp
+
+var sysPromptTest = $"""
+You are a helpful assistant.
+
+You check the request of the user and decide wich categorie user message asking for:
+
+Description:  A description of the damage. E.G. I have a damage of my window.
+
+EMail: E Mail of the user: E.g. please give me your email.
+
+Both: A description and the email of user. E.g. Please describe your problem und giv us your email.
+
+Please answer with description, email or both. If you are unsure answer unkown.
+""";
+
+
+var testAgent=new Llama31Agent(
+    endpoint,API_TOKEN,MODEL_NAME,sysPromptTest, (string name, string args)=>{
+       return "";
+    }
+);
+
+var ans=await testAgent.addMessage("Bitte geben Sie Ihre E-Mail Adresse an.");
+
+#!csharp
+
+testAgent.payload.messages
+
+#!markdown
+
+We save the test results in a DataFrame so we can calculate statistics later.
+
+#!csharp
+
+#r "nuget: Microsoft.Data.Analysis, 0.22.0"
+using Microsoft.Data.Analysis;
+DataFrameColumn[] columns = {
+    new StringDataFrameColumn("subject"),
+    new PrimitiveDataFrameColumn<int>("tool_ok"),
+    new StringDataFrameColumn("description_test"),
+    new StringDataFrameColumn("email_test"),
+    new StringDataFrameColumn("description_ticket"),
+    new StringDataFrameColumn("email_ticket"),
+};
+var df = new DataFrame(columns);
+int irow=0;
+
+#!markdown
+
+Now we load our test data and create the test dialog for every single ticket in the test data file damage_tickets_full_v3.json.
+
+The function getNextProperty interprets the answers from the AI Ticket Agent and provides the information on what to load next from the test ticket: email or message.
+
+Our test for a single test ticket is successful if:
+* a tool call is created.
+* the arguments for the tool call are correct:
+  * email: if it is equal.
+  * message: if it is similar (to be checked manually later).
+
+The results are saved in the DataFrame df.
+
+#!csharp
+
+using System.IO;
+var testTickets=File.ReadAllText("damage_tickets_full_v3.json");
+var array = JArray.Parse(testTickets);
+var getNextProperty=async (object message)=>{
+    dynamic dmessage=message;
+    string content=dmessage.content;
+    testAgent.clearHistory();
+    await testAgent.addMessage(content);
+    dynamic answer=testAgent.payload.messages.Last();
+    Console.WriteLine(answer.content);
+    string kia=answer.content;
+    kia=kia.Trim();
+    kia=kia.ToLower();
+    if(string.Equals(kia,"email"))
+      return "email";
+    return "description";
+};
+
+int testCount=array.Count;
+for(irow=0;irow < testCount;irow++)
+{
+var row = array[irow];
+lastToolCallResult=null;
+ticketAgent.clearHistory();
+
+try {
+///Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages));
+
+//Console.WriteLine(JsonConvert.SerializeObject(row));
+Console.WriteLine("____________________________________________________________");
+Console.WriteLine(row.Value<string>("intro"));
+await ticketAgent.addMessage(row.Value<string>("intro"));
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+var next=await getNextProperty(ticketAgent.payload.messages.Last());
+Console.WriteLine(row.Value<string>(next));
+await ticketAgent.addMessage(row.Value<string>(next));
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+next=await getNextProperty(ticketAgent.payload.messages.Last());
+Console.WriteLine(row.Value<string>(next));
+await ticketAgent.addMessage(row.Value<string>(next));
+Console.WriteLine(JsonConvert.SerializeObject(ticketAgent.payload.messages.Last()));
+
+if(lastToolCallResult!=null 
+&& !string.IsNullOrEmpty((string)lastToolCallResult["email"])
+&& !string.IsNullOrEmpty((string)lastToolCallResult["message"])
+&& string.Equals(row.Value<string>("email"),(string)lastToolCallResult["email"])
+)
+{
+  List<KeyValuePair<string, object>> newRowData = new()
+{
+    new KeyValuePair<string, object>("subject", row.Value<string>("subject")),
+    new KeyValuePair<string, object>("tool_ok", 1),
+    new KeyValuePair<string, object>("description_test",row.Value<string>("description")),
+    new KeyValuePair<string, object>("email_test",row.Value<string>("email")),
+    new KeyValuePair<string, object>("description_ticket",(string)lastToolCallResult["message"]),
+    new KeyValuePair<string, object>("email_ticket",(string)lastToolCallResult["email"])
+};
+df.Append(newRowData, inPlace: true);
+}
+else
+{
+  List<KeyValuePair<string, object>> newRowData = new()
+  {
+    new KeyValuePair<string, object>("subject", row.Value<string>("subject")),
+    new KeyValuePair<string, object>("tool_ok", 0),
+    new KeyValuePair<string, object>("description_test",row.Value<string>("description")),
+    new KeyValuePair<string, object>("email_test",row.Value<string>("email")),
+    new KeyValuePair<string, object>("description_ticket",(string)lastToolCallResult["message"]),
+    new KeyValuePair<string, object>("email_ticket",(string)lastToolCallResult["email"])
+  };
+  df.Append(newRowData, inPlace: true);
+}
+} catch (Exception ex)
+{
+
+}
+}
+
+#!markdown
+
+We save the test results in the CSV file 'results_v3.csv' for later analysis if necessary.
+
+#!csharp
+
+DataFrame.SaveCsv(df,"results_v3.csv", encoding:Encoding.UTF8);
+
+#!markdown
+
+Now let's see the results.
+
+#!csharp
+
+#r "nuget: Microsoft.Data.Analysis, 0.22.0"
+using Microsoft.Data.Analysis;
+var dr=DataFrame.LoadCsv("results_v3.csv", encoding:Encoding.UTF8);
+dr.Description()
+
+#!markdown
+
+The AI Ticket Agent is changing the user input of the ticket.
+We will check for significant deviations (10% of Levenshtein distance) between the user input and the message of the ticket created by the agent through manual inspection.
+
+#!csharp
+
+#r "nuget: Fastenshtein, 1.0.10"
+int iDist=0;
+for(int ir=0;ir<dr.Rows.Count;ir++)
+{
+    string m1=(string)dr["description_ticket"][ir];
+    string m2=(string)dr["description_test"][ir];
+    if(!string.Equals(m1,m2))
+    {
+        Fastenshtein.Levenshtein lev = new Fastenshtein.Levenshtein(m1);
+        var dist=lev.DistanceFrom(m2);
+        var distPercent=dist*1.0/(Math.Max(m1.Length,m2.Length));
+        if(distPercent>0.1)
+        {
+            Console.WriteLine("---------------");
+            Console.WriteLine(m1);
+            Console.WriteLine(m2);
+            Console.WriteLine(""+dist+", "+distPercent+", "+iDist);
+            iDist++;
+        }
+    }
+}

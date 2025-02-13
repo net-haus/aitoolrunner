@@ -1,10 +1,11 @@
-# AI Tool Calling with Meta Llama 3.1
+# AI Experiments with LLMs.
 
-In the notebooks folder, you will find my notebooks for my contributions on the topic of tool calling with the Llama 3.1 model.
+In the notebooks folder, you will find my notebooks on AI experiments in the following areas:
 
-Yow will find a sample for an AI Ticket Agent.
-
-I also developed some ideas to test the AI Ticket Agent.
+- Tool calling with the Llama 3.1 model.
+  - You will find a sample for an AI Ticket Agent.
+  - I also developed some ideas to test the AI Ticket Agent.
+- Image recognition with local multimodal LLMs.
 
 **Requirements**
 
@@ -22,6 +23,7 @@ The examples are:
 * get_weather.dib: Basic example to do tool calling with Llama 3.1.
 * create_ticket.dib: Simple AI Ticket Agent for Llama 3.1 used to create a ticket and send it to a ticket system.
 * test_create_ticket.dib: Test data and automatic tests for AI Ticket Agent.
+* image_to_text.db: Example of image recognition with the local multimodal model LLAVA 1.6.
 
 The notebook tools.dib contains some helper methods and a basic agent class. It is imported in the notebooks to avoid boilerplate code in the examples.
 

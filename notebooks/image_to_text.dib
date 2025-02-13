@@ -1,0 +1,158 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"csharp"}]}}
+
+#!markdown
+
+This notebook demonstrates how to use the local multimodal LLM LLAVA 1.6 to analyze the cleaning state of a kitchen. 
+
+To use this notebook, you need to install [Ollama](https://github.com/ollama/ollama) first. 
+
+Load the multimodal [LLAVA 1.6 model](https://huggingface.co/liuhaotian/llava-v1.6-34b) with the command: `ollama pull llava:34b`. Now you can use the OllamaSharp client to connect to Ollama.
+
+We also compare the results from lokal LLAVA 1.6 with GPT-4O
+
+The LLAVA 1.6 model does not have a system prompt. Therefore, we upload our image of a dirty kitchen and ask it to analyze the image for:
+- A list of cleaning problems visible in the picture.
+- A general score of order and cleanliness.
+
+As a result, you get a list of problems, for example:
+- The countertop has various dishes and utensils scattered about, which need to be washed and put away.
+- ...
+
+The score is also interesting because it gives you an idea of how severe the problems are. 
+
+For this picture, a value of 30% is typical.
+
+#!csharp
+
+#r "nuget: OllamaSharp"
+using OllamaSharp;
+using OllamaSharp.Models;
+using System.IO;
+// set up the client
+
+var uri = new Uri("http://10.10.1.64:11434"); /* on same pc http://localhost:11434*/
+var ollama = new OllamaApiClient(uri);
+
+// select a model which should be used for further operations
+ollama.SelectedModel = /*"llama3.2-vision"*//*"minicpm-v"*/ "llava:34b";
+
+var chat = new Chat(ollama);
+
+chat.Options = new RequestOptions(){
+ Temperature=0.1f
+};
+
+
+var message=
+"""
+List only pressing cleaning problems for visible items on image.
+
+Make a score in percent of the order and cleanliness in the kitchen based on visible items: (0 percent: very bad, 100 percent good).
+""";
+
+
+var firstImage="IMG_4454.jpg";
+//firstImage="IMG_4468.jpg";
+var imageA=File.ReadAllBytes( firstImage /*@"IMG_4468_kueche.png"*/);
+
+List<byte[]> cf= new List<byte[]>(){imageA.ToArray()};
+
+var lavaInfo= new StringBuilder();
+await foreach (var answerToken in chat.SendAsync(message,cf))
+{
+    Console.Write((answerToken));
+    lavaInfo.Append(answerToken);
+}
+
+#!markdown
+
+We upload a picture of the same kitchen in a clean state and use the same question.
+
+The overall score is now 60-70%.
+
+#!csharp
+
+var firstImage="IMG_4468.jpg";
+var imageA=File.ReadAllBytes( firstImage);
+
+List<byte[]> cf= new List<byte[]>(){imageA.ToArray()};
+
+var lavaInfo= new StringBuilder();
+await foreach (var answerToken in chat.SendAsync(message,cf))
+{
+    Console.Write((answerToken));
+    lavaInfo.Append(answerToken);
+}
+
+#!markdown
+
+Using the same question and pictures, we also ask OpenAI's GPT-4o model.
+
+First, for the dirty kitchen, the result is something like:
+
+1. Multiple cups and glasses on the counter.
+2. ...
+
+Order and Cleanliness Score: 60 percent.
+
+#!csharp
+
+#r "nuget: OpenAI"
+using OpenAI.Chat;
+using System.IO;
+var model="gpt-4o";
+string OpenAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+
+var client=new OpenAI.Chat.ChatClient(model,OpenAiApiKey);
+
+var firstImage="IMG_4454.jpg";
+
+ string imageFilePath = firstImage;
+         Stream imageStream = File.OpenRead(imageFilePath);
+        BinaryData imageBytes = BinaryData.FromStream(imageStream);
+        List<ChatMessage> messages =
+        [
+            new UserChatMessage(
+                ChatMessageContentPart.CreateTextPart(message),
+                ChatMessageContentPart.CreateImagePart(imageBytes, "image/jpeg")),
+        ];
+
+ChatCompletion completion = client.CompleteChat(messages);
+completion.Content[0].Text        
+
+#!markdown
+
+Second, for the clean kitchen, the result is like:
+
+1. Cleaning items (cloth, sponge, brush) left out on the sink area.
+2. ...
+
+Order and Cleanliness Score: 85%.
+
+#!csharp
+
+var firstImage="IMG_4468.jpg";
+
+ string imageFilePath = firstImage;
+         Stream imageStream = File.OpenRead(imageFilePath);
+        BinaryData imageBytes = BinaryData.FromStream(imageStream);
+        List<ChatMessage> messages =
+        [
+            new UserChatMessage(
+                ChatMessageContentPart.CreateTextPart(message),
+                ChatMessageContentPart.CreateImagePart(imageBytes, "image/jpeg")),
+        ];
+
+ChatCompletion completion = client.CompleteChat(messages);
+completion.Content[0].Text   
+
+#!markdown
+
+Using an order and cleanliness score, both models can distinguish between a clean and dirty kitchen.
+
+|          | LLAVA 1.6 | GPT-4O |
+|----------|-----------|--------|
+| Dirty kitchen | ~30% | ~60% |
+| Clean kitchen | ~65% | ~85% |

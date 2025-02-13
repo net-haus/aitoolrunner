@@ -331,3 +331,8 @@ for(int ir=0;ir<dr.Rows.Count;ir++)
         }
     }
 }
+
+#!markdown
+
+Statistik mit Anzahl der Tokens.
+Unterschiedliche Szenarien
